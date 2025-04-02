@@ -173,4 +173,9 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
-openssl-*
+# Custom ignores for openssl-benchmark-scripts
+algorithm_results/
+openssl-benchmarks/
+install-exit-status
+openssl_benchmark_results.csv
+test-exit-status

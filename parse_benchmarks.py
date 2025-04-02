@@ -25,7 +25,10 @@ def parse_openssl_benchmark_logs(log_dir):
                     content = f.read()
                     result = parse_single_log(content, filename)
                     if result:
-                        results.append(result)
+                        if isinstance(result, list):
+                            results.extend(result)
+                        else:
+                            results.append(result)
             except Exception as e:
                 print(f"Error parsing {filename}: {e}")
     return results
@@ -168,55 +171,64 @@ def parse_rsa_algorithm(content, result, filename):
         print(f"Warning: Could not find any table in log: {filename}")
         return None
 
+    rsa_results = []
     for start_index, table_type in table_starts:
         data_line = ""
         if start_index + 1 < len(lines):
-            data_line = lines[start_index + 1]
+            # Correctly handle the data line based on table type
+            if table_type == "core" or table_type == "kem" or table_type == "sign":
+                data_line = lines[start_index + 1]
         else:
-            print(f"Warning: Could not find data line in log: {filename}")
+            print(f"Warning: Could not find data line in log: {filename} for table type {table_type}")
             continue
         
         parts = data_line.split()
-        
+        rsa_result = result.copy()
+        rsa_result["table_type"] = table_type
+        rsa_result["algorithm"] = result["algorithm"]
+        rsa_result["mode"] = result["mode"]
+        rsa_result["run"] = result["run"]
+
         if table_type == "core":
             if len(parts) >= 8:
                 try:
-                    result[f"sign_per_second"] = convert_to_float(parts[4])
-                    result[f"verify_per_second"] = convert_to_float(parts[5])
-                    result[f"encrypt_per_second"] = convert_to_float(parts[6])
-                    result[f"decrypt_per_second"] = convert_to_float(parts[7])
+                    rsa_result[f"sign_per_second"] = convert_to_float(parts[7])
+                    rsa_result[f"verify_per_second"] = convert_to_float(parts[8])
+                    rsa_result[f"encrypt_per_second"] = convert_to_float(parts[9])
+                    rsa_result[f"decrypt_per_second"] = convert_to_float(parts[10])
                 except ValueError as e:
                     print(f"Error parsing {filename}: {e}")
                     continue
             else:
-                print(f"Warning: Could not parse data line in log: {filename}")
+                print(f"Warning: Could not parse data line in log: {filename} for table type {table_type}")
                 continue
         elif table_type == "kem":
             if len(parts) >= 6:
                 try:
-                    result[f"keygen_per_second_kem"] = convert_to_float(parts[3])
-                    result[f"encaps_per_second"] = convert_to_float(parts[4])
-                    result[f"decaps_per_second"] = convert_to_float(parts[5])
+                    rsa_result[f"keygen_per_second_kem"] = convert_to_float(parts[4])
+                    rsa_result[f"encaps_per_second"] = convert_to_float(parts[5])
+                    rsa_result[f"decaps_per_second"] = convert_to_float(parts[6])
                 except ValueError as e:
                     print(f"Error parsing {filename}: {e}")
                     continue
             else:
-                print(f"Warning: Could not parse data line in log: {filename}")
+                print(f"Warning: Could not parse data line in log: {filename} for table type {table_type}")
                 continue
         elif table_type == "sign":
             if len(parts) >= 6:
                 try:
-                    result[f"keygen_per_second_sign"] = convert_to_float(parts[3])
-                    result[f"sign_per_second_sign"] = convert_to_float(parts[4])
-                    result[f"verify_per_second_sign"] = convert_to_float(parts[5])
+                    rsa_result[f"keygen_per_second_sign"] = convert_to_float(parts[4])
+                    rsa_result[f"sign_per_second_sign"] = convert_to_float(parts[5])
+                    rsa_result[f"verify_per_second_sign"] = convert_to_float(parts[6])
                 except ValueError as e:
                     print(f"Error parsing {filename}: {e}")
                     continue
             else:
-                print(f"Warning: Could not parse data line in log: {filename}")
+                print(f"Warning: Could not parse data line in log: {filename} for table type {table_type}")
                 continue
+        rsa_results.append(rsa_result)
 
-    return result
+    return rsa_results
 
 def convert_to_float(value):
     """
@@ -233,6 +245,20 @@ def convert_to_float(value):
         return 0
     elif 'cpuinfo:' in value:
         raise ValueError("cpuinfo: is not a number")
+    elif 'keygens/s' in value:
+        return float(value.replace('keygens/s', ''))
+    elif 'encaps/s' in value:
+        return float(value.replace('encaps/s', ''))
+    elif 'decaps/s' in value:
+        return float(value.replace('decaps/s', ''))
+    elif 'sign/s' in value:
+        return float(value.replace('sign/s', ''))
+    elif 'verify/s' in value:
+        return float(value.replace('verify/s', ''))
+    elif 'encr./s' in value:
+        return float(value.replace('encr./s', ''))
+    elif 'decr./s' in value:
+        return float(value.replace('decr./s', ''))
     else:
         return float(value)
 
@@ -250,12 +276,12 @@ def calculate_averages(results):
     grouped_results = defaultdict(list)
 
     for result in results:
-        key = (result["algorithm"], result["mode"])
+        key = (result["algorithm"], result["mode"], result.get("table_type", "none"))
         grouped_results[key].append(result)
 
-    for (algorithm, mode), group in grouped_results.items():
+    for (algorithm, mode, table_type), group in grouped_results.items():
         if len(group) < 3:
-            print(f"Warning: Less than 3 runs for {algorithm} {mode}, cannot calculate average.")
+            print(f"Warning: Less than 3 runs for {algorithm} {mode} {table_type}, cannot calculate average.")
             continue
         
         avg_result = {
@@ -263,6 +289,9 @@ def calculate_averages(results):
             "mode": mode,
             "run": "average",
         }
+        if table_type != "none":
+            avg_result["table_type"] = table_type
+
         if algorithm.startswith("aes") or algorithm.startswith("chacha"):
             avg_result[f"bytes_16"] = sum(r.get("bytes_16",0) for r in group) / len(group)
             avg_result[f"bytes_64"] = sum(r.get("bytes_64",0) for r in group) / len(group)
@@ -307,12 +336,13 @@ def sort_results(results):
         algorithm = result["algorithm"]
         mode = result["mode"]
         run = result["run"]
+        table_type = result.get("table_type", "none")
         
         if run == "average":
             run_sort_value = float('inf')  # Place "average" at the end
         else:
             run_sort_value = run
-        return (algorithm, mode, run_sort_value)
+        return (algorithm, mode, table_type, run_sort_value)
 
     return sorted(results, key=sort_key)
 
@@ -337,7 +367,7 @@ def write_results_to_csv(results, csv_filename):
     ordered_fieldnames = []
     
     # Add the fixed columns first
-    fixed_columns = ["algorithm", "mode", "run"]
+    fixed_columns = ["algorithm", "mode", "run", "table_type"]
     for col in fixed_columns:
         if col in fieldnames:
             ordered_fieldnames.append(col)
@@ -346,6 +376,27 @@ def write_results_to_csv(results, csv_filename):
     # Add the byte columns in the specified order
     byte_columns = ["bytes_16", "bytes_64", "bytes_256", "bytes_1024", "bytes_8192", "bytes_16384"]
     for col in byte_columns:
+        if col in fieldnames:
+            ordered_fieldnames.append(col)
+            fieldnames.remove(col)
+
+    # Add the rsa core columns
+    rsa_core_columns = ["sign_per_second", "verify_per_second", "encrypt_per_second", "decrypt_per_second"]
+    for col in rsa_core_columns:
+        if col in fieldnames:
+            ordered_fieldnames.append(col)
+            fieldnames.remove(col)
+    
+    # Add the rsa kem columns
+    rsa_kem_columns = ["keygen_per_second_kem", "encaps_per_second", "decaps_per_second"]
+    for col in rsa_kem_columns:
+        if col in fieldnames:
+            ordered_fieldnames.append(col)
+            fieldnames.remove(col)
+
+    # Add the rsa sign columns
+    rsa_sign_columns = ["keygen_per_second_sign", "sign_per_second_sign", "verify_per_second_sign"]
+    for col in rsa_sign_columns:
         if col in fieldnames:
             ordered_fieldnames.append(col)
             fieldnames.remove(col)
@@ -361,12 +412,75 @@ def write_results_to_csv(results, csv_filename):
 
     print(f"Results written to {csv_filename}")
 
+def write_algorithm_results_to_csv(results, output_dir):
+    """
+    Writes the parsed benchmark results to separate CSV files for each algorithm.
+
+    Args:
+        results: A list of dictionaries containing the benchmark results.
+        output_dir: The directory to write the CSV files to.
+    """
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    grouped_results = defaultdict(list)
+    for result in results:
+        grouped_results[result["algorithm"]].append(result)
+
+    for algorithm, algorithm_results in grouped_results.items():
+        csv_filename = os.path.join(output_dir, f"openssl_{algorithm}_benchmark_results.csv")
+        
+        fieldnames = set()
+        for result in algorithm_results:
+            fieldnames.update(result.keys())
+
+        ordered_fieldnames = ["algorithm", "mode", "run", "table_type"]
+        
+        # Add the byte columns in the specified order if they exist
+        byte_columns = ["bytes_16", "bytes_64", "bytes_256", "bytes_1024", "bytes_8192", "bytes_16384"]
+        for col in byte_columns:
+            if col in fieldnames:
+                ordered_fieldnames.append(col)
+                fieldnames.remove(col)
+        
+        # Add the rsa core columns
+        rsa_core_columns = ["sign_per_second", "verify_per_second", "encrypt_per_second", "decrypt_per_second"]
+        for col in rsa_core_columns:
+            if col in fieldnames:
+                ordered_fieldnames.append(col)
+                fieldnames.remove(col)
+        
+        # Add the rsa kem columns
+        rsa_kem_columns = ["keygen_per_second_kem", "encaps_per_second", "decaps_per_second"]
+        for col in rsa_kem_columns:
+            if col in fieldnames:
+                ordered_fieldnames.append(col)
+                fieldnames.remove(col)
+
+        # Add the rsa sign columns
+        rsa_sign_columns = ["keygen_per_second_sign", "sign_per_second_sign", "verify_per_second_sign"]
+        for col in rsa_sign_columns:
+            if col in fieldnames:
+                ordered_fieldnames.append(col)
+                fieldnames.remove(col)
+
+        # Add the remaining columns
+        ordered_fieldnames.extend(sorted(list(fieldnames - set(ordered_fieldnames))))
+
+        with open(csv_filename, "w", newline="") as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=ordered_fieldnames)
+            writer.writeheader()
+            for row in algorithm_results:
+                writer.writerow(row)
+
+        print(f"{algorithm} Results written to {csv_filename}")
 
 def main():
     """
-    Main function to parse OpenSSL benchmark logs and generate a CSV file.
+    Main function to parse OpenSSL benchmark logs and generate CSV files.
     """
     log_dir = "openssl-benchmarks"  # Replace with your log directory if different
+    output_dir = "algorithm_results" # Directory to store the algorithm-specific CSVs
     csv_filename = "openssl_benchmark_results.csv"
 
     if not os.path.exists(log_dir):
@@ -378,9 +492,11 @@ def main():
         print("No valid results found.")
         return
     
+    
     averages = calculate_averages(results)
     all_results = sort_results(results + averages)
     write_results_to_csv(all_results, csv_filename)
+    write_algorithm_results_to_csv(all_results, output_dir)
 
 
 if __name__ == "__main__":

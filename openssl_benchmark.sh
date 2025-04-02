@@ -1,4 +1,4 @@
-#!/bin/bash -x
+#!/bin/bash -
 
 # --- Configuration ---
 OPENSSL_BASE_URL="https://www.openssl.org/source/"

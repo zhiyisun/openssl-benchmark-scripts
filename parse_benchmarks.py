@@ -76,89 +76,146 @@ def parse_single_log(content, filename):
     return result
 
 def parse_evp_algorithm(content, result, filename):
-    # Find the line with "type" and the header
-    type_line_index = -1
     lines = content.splitlines()
-    for i, line in enumerate(lines):
-        if "type" in line and "16 bytes" in line:
-            type_line_index = i
+    data_line = None
+    target_algorithm = result["algorithm"].replace(" ", "-").upper()
+    for line in reversed(lines):
+        if line.upper().startswith(target_algorithm):
+            data_line = line
             break
-    
-    if type_line_index == -1:
-        #print(f"Warning: Could not find 'type' header in log: {filename}")
-        return None
-
-    for line in lines[type_line_index+1:]:
-        if line.strip() == "":
-            continue
-        parts = line.split()
-        if len(parts) >= 7:
-            try:
-                result[f"bytes_16"] = convert_to_float(parts[1])
-                result[f"bytes_64"] = convert_to_float(parts[2])
-                result[f"bytes_256"] = convert_to_float(parts[3])
-                result[f"bytes_1024"] = convert_to_float(parts[4])
-                result[f"bytes_8192"] = convert_to_float(parts[5])
-                result[f"bytes_16384"] = convert_to_float(parts[6])
-                break
-            except ValueError as e:
-                print(f"Error parsing {filename}: {e}")
-                return None
-    return result
-
-def parse_hash_algorithm(content, result, filename):
-    lines = content.splitlines()
-    for line in lines:
-        if "bytes per second" in line:
-            parts = line.split()
-            if len(parts) >= 4:
-                try:
-                    # Check if the first part is a number
-                    if parts[0].lower() == "the":
-                        continue
-                    result[f"bytes_16384"] = convert_to_float(parts[0])
+        elif "DONE" in line.upper() and target_algorithm in content.upper():
+            # find the line before DONE
+            for i in range(len(lines)-1, 0, -1):
+                if lines[i].upper() == line.upper():
+                    for j in range(i-1, 0, -1):
+                        if "bytes" in lines[j] and target_algorithm in lines[j].upper():
+                            data_line = lines[j]
+                            break
                     break
-                except ValueError as e:
-                    print(f"Error parsing {filename}: {e}")
-                    return None
-    return result
+            if data_line is None:
+                print(f"Warning: Could not find data line in log: {filename}")
+                return None
+            else:
+                break
 
-def parse_rsa_algorithm(content, result, filename):
-    lines = content.splitlines()
     
-    # Find the line with "sign    verify    sign/s verify/s"
-    header_line_index = -1
-    for i, line in enumerate(lines):
-        if "sign" in line and "verify" in line and "sign/s" in line and "verify/s" in line:
-            header_line_index = i
-            break
-    
-    if header_line_index == -1:
-        print(f"Warning: Could not find 'sign/s verify/s' header in log: {filename}")
-        return None
-
-    data_line = ""
-    if header_line_index + 1 < len(lines):
-        data_line = lines[header_line_index + 1]
-    else:
+    if data_line is None:
         print(f"Warning: Could not find data line in log: {filename}")
         return None
-    
+
     parts = data_line.split()
-    
-    if len(parts) >= 4:
+    if len(parts) >= 7:
         try:
-            # Check if the third part is a number
-            if not parts[2].replace(".", "").isdigit():
-                return None
-            result[f"sign_per_second"] = convert_to_float(parts[2])
-            result[f"verify_per_second"] = convert_to_float(parts[3])
+            result[f"bytes_16"] = convert_to_float(parts[-6])
+            result[f"bytes_64"] = convert_to_float(parts[-5])
+            result[f"bytes_256"] = convert_to_float(parts[-4])
+            result[f"bytes_1024"] = convert_to_float(parts[-3])
+            result[f"bytes_8192"] = convert_to_float(parts[-2])
+            result[f"bytes_16384"] = convert_to_float(parts[-1])
         except ValueError as e:
             print(f"Error parsing {filename}: {e}")
             return None
     else:
         print(f"Warning: Could not parse data line in log: {filename}")
         return None
+    return result
+
+def parse_hash_algorithm(content, result, filename):
+    lines = content.splitlines()
+    data_line = None
+    target_algorithm = result["algorithm"].upper()
+
+    for line in reversed(lines):
+        if target_algorithm in line.upper() and "k" in line and " " in line:
+            data_line = line
+            break
+
+    if data_line is None:
+        print(f"Warning: Could not find data line in log: {filename}")
+        return None
+
+    parts = data_line.split()
+    if len(parts) >= 7:
+        try:
+            result[f"bytes_16"] = convert_to_float(parts[-6])
+            result[f"bytes_64"] = convert_to_float(parts[-5])
+            result[f"bytes_256"] = convert_to_float(parts[-4])
+            result[f"bytes_1024"] = convert_to_float(parts[-3])
+            result[f"bytes_8192"] = convert_to_float(parts[-2])
+            result[f"bytes_16384"] = convert_to_float(parts[-1])
+        except ValueError as e:
+            print(f"Error parsing {filename}: {e}")
+            return None
+    else:
+        print(f"Warning: Could not parse data line in log: {filename}")
+        return None
+
+    return result
+
+def parse_rsa_algorithm(content, result, filename):
+    lines = content.splitlines()
+    
+    table_starts = []
+    for i, line in enumerate(lines):
+        if "sign    verify    encrypt   decrypt   sign/s verify/s  encr./s  decr./s" in line:
+            table_starts.append((i, "core"))
+        elif "keygen    encaps    decaps keygens/s  encaps/s  decaps/s" in line:
+            table_starts.append((i, "kem"))
+        elif "keygen     signs    verify keygens/s    sign/s  verify/s" in line:
+            table_starts.append((i, "sign"))
+
+    if not table_starts:
+        print(f"Warning: Could not find any table in log: {filename}")
+        return None
+
+    for start_index, table_type in table_starts:
+        data_line = ""
+        if start_index + 1 < len(lines):
+            data_line = lines[start_index + 1]
+        else:
+            print(f"Warning: Could not find data line in log: {filename}")
+            continue
+        
+        parts = data_line.split()
+        
+        if table_type == "core":
+            if len(parts) >= 8:
+                try:
+                    result[f"sign_per_second"] = convert_to_float(parts[4])
+                    result[f"verify_per_second"] = convert_to_float(parts[5])
+                    result[f"encrypt_per_second"] = convert_to_float(parts[6])
+                    result[f"decrypt_per_second"] = convert_to_float(parts[7])
+                except ValueError as e:
+                    print(f"Error parsing {filename}: {e}")
+                    continue
+            else:
+                print(f"Warning: Could not parse data line in log: {filename}")
+                continue
+        elif table_type == "kem":
+            if len(parts) >= 6:
+                try:
+                    result[f"keygen_per_second_kem"] = convert_to_float(parts[3])
+                    result[f"encaps_per_second"] = convert_to_float(parts[4])
+                    result[f"decaps_per_second"] = convert_to_float(parts[5])
+                except ValueError as e:
+                    print(f"Error parsing {filename}: {e}")
+                    continue
+            else:
+                print(f"Warning: Could not parse data line in log: {filename}")
+                continue
+        elif table_type == "sign":
+            if len(parts) >= 6:
+                try:
+                    result[f"keygen_per_second_sign"] = convert_to_float(parts[3])
+                    result[f"sign_per_second_sign"] = convert_to_float(parts[4])
+                    result[f"verify_per_second_sign"] = convert_to_float(parts[5])
+                except ValueError as e:
+                    print(f"Error parsing {filename}: {e}")
+                    continue
+            else:
+                print(f"Warning: Could not parse data line in log: {filename}")
+                continue
+
     return result
 
 def convert_to_float(value):
@@ -174,6 +231,8 @@ def convert_to_float(value):
         return float(value.replace('s', ''))
     elif 'bit' in value:
         return 0
+    elif 'cpuinfo:' in value:
+        raise ValueError("cpuinfo: is not a number")
     else:
         return float(value)
 
@@ -212,10 +271,24 @@ def calculate_averages(results):
             avg_result[f"bytes_8192"] = sum(r.get("bytes_8192",0) for r in group) / len(group)
             avg_result[f"bytes_16384"] = sum(r.get("bytes_16384",0) for r in group) / len(group)
         elif algorithm.startswith("sha"):
+            avg_result[f"bytes_16"] = sum(r.get("bytes_16",0) for r in group) / len(group)
+            avg_result[f"bytes_64"] = sum(r.get("bytes_64",0) for r in group) / len(group)
+            avg_result[f"bytes_256"] = sum(r.get("bytes_256",0) for r in group) / len(group)
+            avg_result[f"bytes_1024"] = sum(r.get("bytes_1024",0) for r in group) / len(group)
+            avg_result[f"bytes_8192"] = sum(r.get("bytes_8192",0) for r in group) / len(group)
             avg_result[f"bytes_16384"] = sum(r.get("bytes_16384",0) for r in group) / len(group)
         elif algorithm.startswith("rsa"):
             avg_result[f"sign_per_second"] = sum(r.get("sign_per_second",0) for r in group) / len(group)
             avg_result[f"verify_per_second"] = sum(r.get("verify_per_second",0) for r in group) / len(group)
+            avg_result[f"encrypt_per_second"] = sum(r.get("encrypt_per_second",0) for r in group) / len(group)
+            avg_result[f"decrypt_per_second"] = sum(r.get("decrypt_per_second",0) for r in group) / len(group)
+            avg_result[f"keygen_per_second_kem"] = sum(r.get("keygen_per_second_kem",0) for r in group) / len(group)
+            avg_result[f"encaps_per_second"] = sum(r.get("encaps_per_second",0) for r in group) / len(group)
+            avg_result[f"decaps_per_second"] = sum(r.get("decaps_per_second",0) for r in group) / len(group)
+            avg_result[f"keygen_per_second_sign"] = sum(r.get("keygen_per_second_sign",0) for r in group) / len(group)
+            avg_result[f"sign_per_second_sign"] = sum(r.get("sign_per_second_sign",0) for r in group) / len(group)
+            avg_result[f"verify_per_second_sign"] = sum(r.get("verify_per_second_sign",0) for r in group) / len(group)
+
         averages.append(avg_result)
 
     return averages
@@ -259,10 +332,29 @@ def write_results_to_csv(results, csv_filename):
     fieldnames = set()
     for result in results:
         fieldnames.update(result.keys())
-    fieldnames = sorted(list(fieldnames))
+    
+    # Reorder the fieldnames to match the desired column order
+    ordered_fieldnames = []
+    
+    # Add the fixed columns first
+    fixed_columns = ["algorithm", "mode", "run"]
+    for col in fixed_columns:
+        if col in fieldnames:
+            ordered_fieldnames.append(col)
+            fieldnames.remove(col)
+    
+    # Add the byte columns in the specified order
+    byte_columns = ["bytes_16", "bytes_64", "bytes_256", "bytes_1024", "bytes_8192", "bytes_16384"]
+    for col in byte_columns:
+        if col in fieldnames:
+            ordered_fieldnames.append(col)
+            fieldnames.remove(col)
 
+    # Add the remaining columns
+    ordered_fieldnames.extend(sorted(list(fieldnames)))
+    
     with open(csv_filename, "w", newline="") as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer = csv.DictWriter(csvfile, fieldnames=ordered_fieldnames)
         writer.writeheader()
         for row in results:
             writer.writerow(row)

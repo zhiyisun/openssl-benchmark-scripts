@@ -32,6 +32,15 @@ get_latest_openssl_version() {
   return 0
 }
 
+get_evp_flag() {
+  local algo="$1"
+  if [[ "$algo" == "aes-128-gcm" || "$algo" == "aes-256-gcm" || "$algo" == "chacha20" || "$algo" == "chacha20-poly1305" ]]; then
+    echo "-evp"
+  else
+    echo ""
+  fi
+}
+
 # --- Get Latest OpenSSL Version ---
 log_info "Fetching the latest stable OpenSSL version..."
 latest_version=$(get_latest_openssl_version)
@@ -81,10 +90,13 @@ BENCHMARK_ALGORITHMS=(
   "rsa4096"
   "sha256"
   "sha512"
-  "-evp aes-128-gcm"
-  "-evp aes-256-gcm"
-  "-evp chacha20"
-  "-evp chacha20-poly1305"
+  "aes-128-gcm"
+  "aes-256-gcm"
+  "chacha20"
+  "chacha20-poly1305"
+  "rsa"
+  "aes"
+  "sha256"
 )
 
 BENCHMARK_MODES=(
@@ -104,10 +116,13 @@ for algo in "${BENCHMARK_ALGORITHMS[@]}"; do
         LOG_FILE="../${LOG_DIR}/${algo// /_}_${mode}_run${run}.log"
       fi
       cd "openssl-${OPENSSL_VERSION}" || exit 1
+
+      evp_flag=$(get_evp_flag "$algo")
+
       if [ "$mode" == "single" ]; then
-        LD_LIBRARY_PATH=.:"$LD_LIBRARY_PATH" ./apps/openssl speed $algo > "$LOG_FILE" 2>&1
+        LD_LIBRARY_PATH=.:"$LD_LIBRARY_PATH" ./apps/openssl speed $evp_flag "$algo" > "$LOG_FILE" 2>&1
       else
-        LD_LIBRARY_PATH=.:"$LD_LIBRARY_PATH" ./apps/openssl speed -multi "$NUM_THREADS" $algo > "$LOG_FILE" 2>&1
+        LD_LIBRARY_PATH=.:"$LD_LIBRARY_PATH" ./apps/openssl speed -multi "$NUM_THREADS" $evp_flag "$algo" > "$LOG_FILE" 2>&1
       fi
       test_exit_status=$?
       echo "$test_exit_status" > "../${TEST_EXIT_FILE}"

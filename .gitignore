@@ -179,3 +179,4 @@ openssl-benchmarks/
 install-exit-status
 openssl_benchmark_results.csv
 test-exit-status
+.qodo
